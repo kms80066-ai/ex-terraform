@@ -19,7 +19,7 @@ resource "aws_subnet" "std09_public_subnet" {
   enable_resource_name_dns_a_record_on_launch = true
 
   tags = {
-    Name = "${local.tag_header}public-$split("-", each.key)[length(split("-", each.key))-1]"
+    Name = "${local.tag_header}public-$split(" - ", each.key)[length(split(" - ", each.key))-1]"
   }
 }
 
@@ -31,7 +31,7 @@ resource "aws_subnet" "std09_private_subnet" {
   cidr_block        = var.subnet_cidr[1][each.key]
   availability_zone = each.key
   tags = {
-     Name = "${local.tag_header}private-$split("-", each.key)[length(split("-", each.key))-1]"
+    Name = "${local.tag_header}private-$split(" - ", each.key)[length(split(" - ", each.key))-1]"
   }
 }
 
@@ -173,34 +173,34 @@ resource "aws_security_group" "std09_mysql_sg" {
   }
 }
 
-# Web 보안 그룹(ALB) 생성
-resource "aws_security_group" "std09_ext_alb_sg" {
-  name        = "${local.tag_header}ext-alb-sg"
-  description = "Security group for ext-alb access"
-  vpc_id      = aws_vpc.std09_vpc.id
+# # Web 보안 그룹(ALB) 생성
+# resource "aws_security_group" "std09_ext_alb_sg" {
+#   name        = "${local.tag_header}ext-alb-sg"
+#   description = "Security group for ext-alb access"
+#   vpc_id      = aws_vpc.std09_vpc.id
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1" # 모든 프로토콜 허용
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  tags = {
-    Name = "${local.tag_header}ext-alb-sg"
-  }
-}
+#   ingress {
+#     from_port   = 80
+#     to_port     = 80
+#     protocol    = "tcp"
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
+#   ingress {
+#     from_port   = 443
+#     to_port     = 443
+#     protocol    = "tcp"
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
+#   egress {
+#     from_port   = 0
+#     to_port     = 0
+#     protocol    = "-1" # 모든 프로토콜 허용
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
+#   tags = {
+#     Name = "${local.tag_header}ext-alb-sg"
+#   }
+# }
 
 # 프라이빗 웹 인스턴스용 보안그룹
 resource "aws_security_group" "std09_int_alb_sg" {
@@ -281,6 +281,74 @@ resource "aws_security_group_rule" "std09_cluster_from_alb_https_rule" {
   description              = "Allow nodes to reach cluster API server"
 }
 
+# Web 보안 그룹(ALB) 생성
+resource "aws_security_group" "std09_ext_alb_sg" {
+  name        = "${local.tag_header}ext-alb-sg"
+  description = "Security group for ext-alb access"
+  vpc_id      = aws_vpc.std09_vpc.id
+
+
+  dynamic "ingress" {
+    for_each = [80, 443]
+    content {
+      from_port   = ingress.value
+      to_port     = ingress.value
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1" # 모든 프로토콜 허용
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "${local.tag_header}ext-alb-sg"
+  }
+}
+
+# =================================
+# NACL
+resource "aws_network_acl" "std09-ex-acl" {
+  vpc_id = aws_vpc.std09-lab-vpc.id
+  ingress {
+    rule_no    = 100 # 중복되지 않게 작성
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 80
+    to_port    = 80
+  }
+  ingress {
+    rule_no    = 90 # 중복되지 않게 작성
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 443
+    to_port    = 443
+  }
+  egress {
+    rule_no    = 100
+    protocol   = "-1"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+  tags = {
+    Name = "${local.tag_header}ex-acl"
+  }
+}
+
+resource "aws_network_acl_association" "std09-ex-nacl-assoc" {
+  subnet_id      = aws_subnet.std09_public_subnet.id
+  network_acl_id = aws_network_acl.std09-ex-acl.id
+}
+
+
 # ============================================
 # 테라폼은 선언형 언어, IF문이 없다.
 # if문을 대체하는 3항 연산자를 통해 간단한 제어만 가능
@@ -288,66 +356,66 @@ resource "aws_security_group_rule" "std09_cluster_from_alb_https_rule" {
 # [다중 삼항 연산자] 조건1 ? 조건1이 참일때의 값 : (
 #   조건2 ? 조건2이 참일때의 값 : 조건2이 거짓일때의 값)
 
-resource "aws_instance" "std09-instance" {
-  ami           = "ami-02f1c1b3f3eedbd0d"
-  instance_type = "t3.micro"
-  subnet_id     = aws_subnet.std09_public_subnet["ca-central-1a"].id
-  count         = local.instance_chk ? 1 : 0
+# resource "aws_instance" "std09-instance" {
+#   ami           = "ami-02f1c1b3f3eedbd0d"
+#   instance_type = "t3.micro"
+#   subnet_id     = aws_subnet.std09_public_subnet["ca-central-1a"].id
+#   count         = local.instance_chk ? 1 : 0
 
-  tags = {
-    Name = "std09-${count.index + 1}-instance"
-  }
-}
+#   tags = {
+#     Name = "std09-${count.index + 1}-instance"
+#   }
+# }
 
-# 중첩 삼항
-locals {
-  instance_type = "default" # nano, micro, small
-}
+# # 중첩 삼항
+# locals {
+#   instance_type = "default" # nano, micro, small
+# }
 
-resource "aws_instance" "std09-ec2" {
-  ami = "ami-02f1c1b3f3eedbd0d"
-  instance_type = local.instance_type == "default" ? "t3.nano" : (
-  local.instance_type == "micro" ? "t3.micro" : "t3.small")
-  subnet_id = aws_subnet.std09_public_subnet["ca-central-1a"].id
+# resource "aws_instance" "std09-ec2" {
+#   ami = "ami-02f1c1b3f3eedbd0d"
+#   instance_type = local.instance_type == "default" ? "t3.nano" : (
+#   local.instance_type == "micro" ? "t3.micro" : "t3.small")
+#   subnet_id = aws_subnet.std09_public_subnet["ca-central-1a"].id
 
 
-  tags = {
-    Name = "std09-2-instance"
-  }
-}
+#   tags = {
+#     Name = "std09-2-instance"
+#   }
+# }
 
-# =====================================================
-# 문자열 함수
-output "zfunc_string_upper" {
-  value = upper("abcd")
-}
+# # =====================================================
+# # 문자열 함수
+# output "zfunc_string_upper" {
+#   value = upper("abcd")
+# }
 
-output "zfunc_string_lower" {
-  value = lower("AbCd")
-}
+# output "zfunc_string_lower" {
+#   value = lower("AbCd")
+# }
 
-output "zfunc_string_replace" {
-  value = replace("abcdb", "b", "K")
-}
+# output "zfunc_string_replace" {
+#   value = replace("abcdb", "b", "K")
+# }
 
-# 문자열 나누기
-# 전체 문자열에서 특정 문자를 기준으로 리스트로 변환
-output "zfunc_string_split" {
-  value = split("-", "ca-central-1")[length(split("-", "ca-central-1")) - 1]
-}
+# # 문자열 나누기
+# # 전체 문자열에서 특정 문자를 기준으로 리스트로 변환
+# output "zfunc_string_split" {
+#   value = split("-", "ca-central-1")[length(split("-", "ca-central-1")) - 1]
+# }
 
-# 문자열 연결
-output "zfunc_string_join" {
-  value = join("*", split("-", "ca-central-1a"))
-}
+# # 문자열 연결
+# output "zfunc_string_join" {
+#   value = join("*", split("-", "ca-central-1a"))
+# }
 
-# ===========================
-# for 표현식
-output "for" {
-  value = [for name in ["ABC", "DeF", "HIj"] : upper(name)]
-}
+# # ===========================
+# # for 표현식
+# output "for" {
+#   value = [for name in ["ABC", "DeF", "HIj"] : upper(name)]
+# }
 
-output "num" {
-  value = [for num in [131, 4322, 18, 999] : num if num % 2 == 0]
-}
+# output "num" {
+#   value = [for num in [131, 4322, 18, 999] : num if num % 2 == 0]
+# }
 
