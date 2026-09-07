@@ -1,0 +1,288 @@
+resource "aws_vpc" "std09_vpc" {
+  cidr_block           = var.vpc_cidr
+  instance_tenancy     = "default"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    Name = "${local.tag_header}vpc"
+  }
+}
+
+# Public Subnet 생성
+resource "aws_subnet" "std09_public_subnet" {
+  # for_each = toset(local.azs)
+  count             = length(local.azs)
+  vpc_id            = aws_vpc.std09_vpc.id
+  cidr_block        = var.subnet_cidr[0][count.index]
+  availability_zone = local.azs[count.index]
+  # Public Subnet 설정
+  map_public_ip_on_launch                     = true
+  enable_resource_name_dns_a_record_on_launch = true
+
+  tags = {
+    Name = "${local.tag_header}public-${local.azs[count.index]}-subnet"
+  }
+}
+
+
+# Private Subnet 생성
+resource "aws_subnet" "std09_private_subnet" {
+  vpc_id            = aws_vpc.std09_vpc.id
+  count             = length(local.azs)
+  cidr_block        = var.subnet_cidr[1][count.index]
+  availability_zone = local.azs[count.index]
+  tags = {
+    Name = "${local.tag_header}private-${local.azs[count.index]}-subnet"
+  }
+}
+
+
+
+# Internet Gateway 생성
+resource "aws_internet_gateway" "std09_igw" {
+  vpc_id = aws_vpc.std09_vpc.id
+
+  tags = {
+    Name = "${local.tag_header}igw"
+  }
+}
+
+# NAT 생성을 위한 EIP 생성
+resource "aws_eip" "std09_nat_eip" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${local.tag_header}nat-eip"
+  }
+}
+
+# NAT Gateway 생성
+resource "aws_nat_gateway" "std09_nat_gw" {
+  allocation_id = aws_eip.std09_nat_eip.id
+  subnet_id     = aws_subnet.std09_public_subnet[0].id
+  depends_on    = [aws_internet_gateway.std09_igw]
+
+  tags = {
+    Name = "${local.tag_header}nat-gw"
+  }
+}
+
+# Public Route Table 생성
+resource "aws_route_table" "std09_public_rt" {
+  vpc_id = aws_vpc.std09_vpc.id
+
+  tags = {
+    Name = "${local.tag_header}public-rt"
+  }
+}
+
+# Public 서브넷 연결
+resource "aws_route_table_association" "std09_public_rt_assoc" {
+  for_each = {
+    "ca-central-1a" = aws_subnet.std09_public_subnet[0].id
+    "ca-central-1b" = aws_subnet.std09_public_subnet[1].id
+    "ca-central-1d" = aws_subnet.std09_public_subnet[2].id
+  }
+  subnet_id      = each.value
+  route_table_id = aws_route_table.std09_public_rt.id
+}
+
+# resource "aws_route_table_association" "std09_public_rt_assoc" {
+#   subnet_id      = aws_subnet.std09_public1a_subnet.id
+#   route_table_id = aws_route_table.std09_public_rt.id
+# }
+
+# Public과 IGW 라우팅
+resource "aws_route" "std09_public_rt_route" {
+  route_table_id         = aws_route_table.std09_public_rt.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.std09_igw.id
+}
+
+
+
+# Private Route Table 생성 (AZ 개수만큼 자동 생성)
+resource "aws_route_table" "std09_private_rt" {
+  count  = length(local.azs)
+  vpc_id = aws_vpc.std09_vpc.id
+
+  tags = {
+    Name = "${local.tag_header}private-${local.azs[count.index]}-rt"
+  }
+}
+
+
+# Private 서브넷과 Private 라우팅 테이블 연결
+resource "aws_route_table_association" "std09_private_rt_assoc" {
+  count          = length(local.azs)
+  subnet_id      = aws_subnet.std09_private_subnet[count.index].id
+  route_table_id = aws_route_table.std09_private_rt[count.index].id
+}
+
+# Private와 NAT GW 라우팅 규칙
+resource "aws_route" "std09_private_rt_route" {
+  count                  = length(local.azs)
+  route_table_id         = aws_route_table.std09_private_rt[count.index].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.std09_nat_gw.id
+}
+
+# security group 생성
+
+# ssh 접속용 생성
+resource "aws_security_group" "std09_ssh_sg" {
+  name        = "${local.tag_header}ssh-sg"
+  description = "Security group for SSH access"
+  vpc_id      = aws_vpc.std09_vpc.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1" # 모든 프로토콜 허용
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${local.tag_header}ssh-sg"
+  }
+}
+
+# MySQL 접속용 생성
+resource "aws_security_group" "std09_mysql_sg" {
+  name        = "${local.tag_header}mysql-sg"
+  description = "Security group for MySQL access"
+  vpc_id      = aws_vpc.std09_vpc.id
+
+  ingress {
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1" # 모든 프로토콜 허용
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "${local.tag_header}mysql-sg"
+  }
+}
+
+# Web 보안 그룹(ALB) 생성
+resource "aws_security_group" "std09_ext_alb_sg" {
+  name        = "${local.tag_header}ext-alb-sg"
+  description = "Security group for ext-alb access"
+  vpc_id      = aws_vpc.std09_vpc.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1" # 모든 프로토콜 허용
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "${local.tag_header}ext-alb-sg"
+  }
+}
+
+# 프라이빗 웹 인스턴스용 보안그룹
+resource "aws_security_group" "std09_int_alb_sg" {
+  name        = "${local.tag_header}int-alb-sg"
+  description = "Security group for int-alb access"
+  vpc_id      = aws_vpc.std09_vpc.id
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1" # 모든 프로토콜 허용
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "${local.tag_header}int-alb-sg"
+  }
+}
+
+# 보안그룹 규칙 추가: 외부 ALB에서 내부 ALB로의 트래픽 허용
+resource "aws_security_group_rule" "std09_int_alb_rule" {
+  type      = "ingress"
+  from_port = 80
+  to_port   = 80
+  protocol  = "tcp"
+  # 규칙을 추가할 보안 그룹의 아이디
+  security_group_id = aws_security_group.std09_int_alb_sg.id
+  # 소스로 어떤 보안 그룹을 추가할 지, 추가할 보안그룹의 아이디 지정
+  source_security_group_id = aws_security_group.std09_ext_alb_sg.id
+}
+
+# EKS 워커 노드 그룹용 보안그룹 (필수)
+# ==============================================================================
+resource "aws_security_group" "std09_eks_node_sg" {
+  name        = "${local.tag_header}eks-node-sg"
+  description = "Security group for EKS worker nodes"
+  vpc_id      = aws_vpc.std09_vpc.id
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${local.tag_header}eks-node-sg"
+  }
+}
+# [노드 규칙] 외부 ALB에서 들어오는 트래픽 허용
+# AWS Load Balancer Controller(Ingress) 사용 시: NodePort(30000-32767) 또는 특정 타깃 포트(예: 80, 8080) 허용
+resource "aws_security_group_rule" "std09_node_from_alb_rule" {
+  type                     = "ingress"
+  from_port                = 30000
+  to_port                  = 32767
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.std09_eks_node_sg.id
+  source_security_group_id = aws_security_group.std09_ext_alb_sg.id
+  description              = "Allow traffic from ALB to NodePort services"
+}
+# (Target Group이 인스턴스 IP 모드(Pod 직접 통신)인 경우 HTTP 포트도 허용
+resource "aws_security_group_rule" "std09_node_from_alb_http_rule" {
+  type                     = "ingress"
+  from_port                = 80
+  to_port                  = 80
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.std09_eks_node_sg.id
+  source_security_group_id = aws_security_group.std09_ext_alb_sg.id
+  description              = "Allow direct HTTP traffic from ALB to pods"
+}
+
+resource "aws_security_group_rule" "std09_cluster_from_alb_https_rule" {
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.std09_eks_node_sg.id
+  source_security_group_id = aws_security_group.std09_ext_alb_sg.id
+  description              = "Allow nodes to reach cluster API server"
+}
+

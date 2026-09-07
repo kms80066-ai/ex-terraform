@@ -1,0 +1,23 @@
+# 1. 패키지 목록을 최신화하고, 설치에 필요한 기본 도구(보안 키 관리 및 리포지토리 추가 도구)를 설치합니다.
+sudo apt update
+sudo apt install -y gnupg software-properties-common
+
+# 2. HashiCorp의 공식 GPG 키(신뢰할 수 있는 소프트웨어임을 증명하는 디지털 서명)를 다운로드합니다.
+# 다운로드한 키를 시스템이 읽을 수 있는 형태로 변환(dearmor)하여 특정 경로에 저장합니다.
+wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | \
+sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+# 3. 테라폼 설치 파일을 제공하는 HashiCorp 공식 저장소(Repository) 주소를 시스템에 등록합니다.
+# 이때, 위에서 저장한 GPG 키를 사용하여 해당 저장소의 보안을 확인하도록 설정합니다.
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+https://apt.releases.hashicorp.com $(lsb_release -cs) main" | \
+sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+# 4. 새로 추가된 HashiCorp 저장소 정보를 반영하기 위해 패키지 목록을 다시 업데이트하고,
+# 최종적으로 테라폼(terraform)을 설치합니다.
+sudo apt update
+sudo apt install terraform
+
+# 5. 설치 확인
+terraform --version
+
